@@ -1,47 +1,9 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
     <title>NFT发起者平台</title>
     <script src="https://cdn.jsdelivr.net/npm/web3@1.7.0/dist/web3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100">
@@ -49,12 +11,13 @@
         <h1 class="text-3xl font-bold mb-4">NFT发起者平台</h1>
         
         <div id="wallet-info" class="mb-4"></div>
+        <div id="loading" class="hidden text-blue-500 mb-4">处理中...</div>
         
         <!-- 创建NFT集合 -->
         <div class="mb-8 p-4 bg-white rounded shadow">
             <h2 class="text-xl font-bold mb-4">创建新NFT集合</h2>
             <div class="mb-4">
-                <input id="image-uri" type="text" placeholder="NFT图片URL" class="border p-2 w-full">
+                <input id="image-uri" type="text" placeholder="NFT图片URL (如 IPFS 链接)" class="border p-2 w-full">
             </div>
             <div class="mb-4">
                 <input id="max-supply" type="number" placeholder="最大供应量" class="border p-2 w-full">
@@ -62,7 +25,7 @@
             <div class="mb-4">
                 <label><input id="gas-sponsored" type="checkbox"> 发起者承担Gas费</label>
             </div>
-            <button onclick="createCollection()" class="bg-blue-500 text-white p-2 rounded">创建NFT集合</button>
+            <button id="create-btn" onclick="createCollection()" class="bg-blue-500 text-white p-2 rounded" disabled>创建NFT集合</button>
         </div>
         
         <!-- 添加白名单 -->
@@ -76,6 +39,10 @@
             <div class="mb-4">
                 <input id="whitelist-addresses" type="text" placeholder="白名单地址(逗号分隔)" class="border p-2 w-full">
             </div>
+            <div class="mb-4">
+                <label class="block mb-2">上传XLSX文件（地址列表）:</label>
+                <input id="whitelist-file" type="file" accept=".xlsx" class="border p-2 w-full">
+            </div>
             <button onclick="addWhitelist()" class="bg-green-500 text-white p-2 rounded">添加白名单</button>
         </div>
         
@@ -84,10 +51,49 @@
             <h2 class="text-xl font-bold mb-4">已创建的NFT集合</h2>
             <div id="creator-collections-list"></div>
         </div>
+        
+        <!-- 分享到X -->
+        <div class="mb-8 p-4 bg-white rounded shadow">
+            <h2 class="text-xl font-bold mb-4">分享到X</h2>
+            <button onclick="shareOnX()" class="bg-blue-400 text-white p-2 rounded">分享到X平台</button>
+        </div>
     </div>
 
     <script>
-        const contractABI = [  [ 
+        // XLSX 处理逻辑
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+            return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+            if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+                try {
+                    var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                    var firstSheetName = workbook.SheetNames[0];
+                    var worksheet = workbook.Sheets[firstSheetName];
+                    var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                    var filteredData = jsonData.filter(row => row.some(filledCell));
+                    var headerRowIndex = filteredData.findIndex((row, index) =>
+                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                    );
+                    if (headerRowIndex === -1 || headerRowIndex > 25) {
+                        headerRowIndex = 0;
+                    }
+                    var csv = XLSX.utils.sheet_to_csv(XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)));
+                    return csv;
+                } catch (e) {
+                    console.error('XLSX 解析错误:', e);
+                    return "";
+                }
+            }
+            return gk_fileData[filename] || "";
+        }
+
+        // 合约配置
+        const contractAddress = "0x0a0245e075880fB96A93ab81aa6D179255823577"; // 替换为 Sepolia 部署地址
+        const contractABI = [
 	{
 		"inputs": [
 			{
@@ -874,26 +880,33 @@
 		"stateMutability": "view",
 		"type": "function"
 	}
-
-           
-        ]];
-
- // 这里需要填入实际的合约ABI
-        const contractAddress = "0x0a0245e075880fB96A93ab81aa6D179255823577"; // 替换为实际部署的合约地址
+];
         let web3, contract, userAccount;
 
         async function init() {
+            console.log('window.ethereum:', window.ethereum);
             if (window.ethereum) {
                 web3 = new Web3(window.ethereum);
                 try {
+                    const chainId = await web3.eth.net.getId();
+                    if (chainId !== 11155111) {
+                        alert('请切换到 Sepolia 网络');
+                        return;
+                    }
                     await window.ethereum.request({ method: 'eth_requestAccounts' });
                     const accounts = await web3.eth.getAccounts();
                     userAccount = accounts[0];
                     contract = new web3.eth.Contract(contractABI, contractAddress);
+                    console.log('contract methods:', contract.methods);
+                    if (!contract.methods.createCollection) {
+                        alert('createCollection 方法未找到，请检查 ABI');
+                        return;
+                    }
+                    document.getElementById('create-btn').disabled = false;
                     updateUI();
                 } catch (error) {
                     console.error("连接钱包失败:", error);
-                    alert("连接钱包失败，请确保MetaMask已安装并连接到Arbitrum网络");
+                    alert("连接钱包失败，请确保MetaMask已安装并连接到Sepolia网络");
                 }
             } else {
                 alert("请安装MetaMask!");
@@ -904,37 +917,43 @@
             const walletInfo = document.getElementById('wallet-info');
             walletInfo.innerHTML = `已连接钱包: ${userAccount}`;
             
-            // 获取发起者创建的集合
-            const collections = await contract.methods.getCreatorCollections(userAccount).call();
-            const collectionsList = document.getElementById('creator-collections-list');
-            const collectionSelect = document.getElementById('whitelist-collection-id');
-            collectionsList.innerHTML = '';
-            collectionSelect.innerHTML = '<option value="">请选择NFT集合</option>';
-            
-            for (let collectionId of collections) {
-                const collection = await contract.methods.nftCollections(collectionId).call();
-                // 更新集合列表
-                const div = document.createElement('div');
-                div.className = 'mb-4 p-4 border rounded';
-                div.innerHTML = `
-                    <img src="${collection.imageURI}" class="w-32 h-32 object-cover mb-2">
-                    <p>集合ID: ${collectionId}</p>
-                    <p>当前供应: ${collection.currentSupply}/${collection.maxSupply}</p>
-                    <p>Gas费用: ${collection.gasSponsored ? '发起者承担' : '用户自付'}</p>
-                    <input id="max-supply-${collectionId}" type="number" placeholder="新最大供应量" class="border p-2 w-full mt-2">
-                    <button onclick="updateMaxSupply(${collectionId})" class="bg-yellow-500 text-white p-2 rounded mt-2">修改最大供应量</button>
-                `;
-                collectionsList.appendChild(div);
+            try {
+                const collections = await contract.methods.getCreatorCollections(userAccount).call();
+                const collectionsList = document.getElementById('creator-collections-list');
+                const collectionSelect = document.getElementById('whitelist-collection-id');
+                collectionsList.innerHTML = '';
+                collectionSelect.innerHTML = '<option value="">请选择NFT集合</option>';
                 
-                // 更新白名单选择下拉菜单
-                const option = document.createElement('option');
-                option.value = collectionId;
-                option.text = `集合ID: ${collectionId} (图片: ${collection.imageURI.slice(0, 20)}...)`;
-                collectionSelect.appendChild(option);
+                for (let collectionId of collections) {
+                    const collection = await contract.methods.nftCollections(collectionId).call();
+                    const div = document.createElement('div');
+                    div.className = 'mb-4 p-4 border rounded';
+                    div.innerHTML = `
+                        <img src="${collection.imageURI}" class="w-32 h-32 object-cover mb-2" onerror="this.src='https://via.placeholder.com/150'">
+                        <p>集合ID: ${collectionId}</p>
+                        <p>当前供应: ${collection.currentSupply}/${collection.maxSupply}</p>
+                        <p>Gas费用: ${collection.gasSponsored ? '发起者承担' : '用户自付'}</p>
+                        <input id="max-supply-${collectionId}" type="number" placeholder="新最大供应量" class="border p-2 w-full mt-2">
+                        <button onclick="updateMaxSupply(${collectionId})" class="bg-yellow-500 text-white p-2 rounded mt-2">修改最大供应量</button>
+                    `;
+                    collectionsList.appendChild(div);
+                    
+                    const option = document.createElement('option');
+                    option.value = collectionId;
+                    option.text = `集合ID: ${collectionId} (图片: ${collection.imageURI.slice(0, 20)}...)`;
+                    collectionSelect.appendChild(option);
+                }
+            } catch (error) {
+                console.error("更新UI失败:", error);
+                alert("无法加载NFT集合，请检查合约地址和网络");
             }
         }
 
         async function createCollection() {
+            if (!contract || !contract.methods.createCollection) {
+                alert('合约未初始化或 createCollection 方法不可用，请检查 ABI 和合约地址');
+                return;
+            }
             const imageURI = document.getElementById('image-uri').value;
             const maxSupply = document.getElementById('max-supply').value;
             const gasSponsored = document.getElementById('gas-sponsored').checked;
@@ -944,6 +963,7 @@
                 return;
             }
             
+            document.getElementById('loading').classList.remove('hidden');
             try {
                 await contract.methods.createCollection(imageURI, gasSponsored, maxSupply)
                     .send({ from: userAccount });
@@ -952,30 +972,105 @@
             } catch (error) {
                 console.error(error);
                 alert('创建失败: ' + error.message);
+            } finally {
+                document.getElementById('loading').classList.add('hidden');
             }
         }
 
         async function addWhitelist() {
+            if (!contract) {
+                alert('合约未初始化，请刷新页面并连接MetaMask');
+                return;
+            }
             const collectionId = document.getElementById('whitelist-collection-id').value;
-            const addresses = document.getElementById('whitelist-addresses').value.split(',').map(addr => addr.trim());
+            let addresses = document.getElementById('whitelist-addresses').value.split(',').map(addr => addr.trim());
+            const fileInput = document.getElementById('whitelist-file');
             
-            if (!collectionId || !addresses.length) {
-                alert('请选择NFT集合并输入有效地址');
+            if (!collectionId) {
+                alert('请选择NFT集合');
                 return;
             }
             
-            try {
-                await contract.methods.addToWhitelist(addresses, collectionId)
-                    .send({ from: userAccount });
-                alert(`白名单添加成功（集合ID: ${collectionId}）`);
-                updateUI();
-            } catch (error) {
-                console.error(error);
-                alert('添加失败: ' + error.message);
+            // 处理文件上传
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                const filename = file.name;
+                gk_isXlsx = filename.endsWith('.xlsx');
+                gk_xlsxFileLookup[filename] = true;
+                
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    gk_fileData[filename] = e.target.result.split(',')[1]; // Extract base64 data
+                    const csv = loadFileData(filename);
+                    if (csv) {
+                        const csvAddresses = csv.split('\n').slice(1).map(row => row.split(',')[0].trim()).filter(addr => addr);
+                        addresses = [...new Set([...addresses, ...csvAddresses])]; // 合并并去重
+                        
+                        // 验证地址格式
+                        for (let addr of addresses) {
+                            if (!web3.utils.isAddress(addr)) {
+                                alert(`无效地址: ${addr}`);
+                                return;
+                            }
+                        }
+                        
+                        if (!addresses.length) {
+                            alert('未提供有效地址');
+                            return;
+                        }
+                        
+                        document.getElementById('loading').classList.remove('hidden');
+                        try {
+                            await contract.methods.addToWhitelist(addresses, collectionId)
+                                .send({ from: userAccount });
+                            alert(`白名单添加成功（集合ID: ${collectionId}）`);
+                            updateUI();
+                        } catch (error) {
+                            console.error(error);
+                            alert('添加失败: ' + error.message);
+                        } finally {
+                            document.getElementById('loading').classList.add('hidden');
+                        }
+                    } else {
+                        alert('无法解析XLSX文件');
+                    }
+                };
+                reader.readAsDataURL(file);
+            } else {
+                // 验证文本输入地址
+                addresses = addresses.filter(addr => addr);
+                for (let addr of addresses) {
+                    if (!web3.utils.isAddress(addr)) {
+                        alert(`无效地址: ${addr}`);
+                        return;
+                    }
+                }
+                
+                if (!addresses.length) {
+                    alert('请输入有效地址');
+                    return;
+                }
+                
+                document.getElementById('loading').classList.remove('hidden');
+                try {
+                    await contract.methods.addToWhitelist(addresses, collectionId)
+                        .send({ from: userAccount });
+                    alert(`白名单添加成功（集合ID: ${collectionId}）`);
+                    updateUI();
+                } catch (error) {
+                    console.error(error);
+                    alert('添加失败: ' + error.message);
+                } finally {
+                    document.getElementById('loading').classList.add('hidden');
+                }
             }
         }
 
         async function updateMaxSupply(collectionId) {
+            if (!contract) {
+                alert('合约未初始化，请刷新页面并连接MetaMask');
+                return;
+            }
             const newMaxSupply = document.getElementById(`max-supply-${collectionId}`).value;
             
             if (!newMaxSupply) {
@@ -983,6 +1078,7 @@
                 return;
             }
             
+            document.getElementById('loading').classList.remove('hidden');
             try {
                 await contract.methods.updateMaxSupply(collectionId, newMaxSupply)
                     .send({ from: userAccount });
@@ -991,7 +1087,15 @@
             } catch (error) {
                 console.error(error);
                 alert('修改失败: ' + error.message);
+            } finally {
+                document.getElementById('loading').classList.add('hidden');
             }
+        }
+
+        function shareOnX() {
+            const text = `铸造我的NFT！合约地址: ${contractAddress}\n创建者: @shorttrber\n访问: ${window.location.href}`;
+            const url = `https://x.com/intent/tweet?text=${encodeURIComponent(text)}`;
+            window.open(url, '_blank');
         }
 
         window.onload = init;
