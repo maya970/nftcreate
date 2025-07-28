@@ -1,47 +1,9 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
     <title>NFT接受者平台</title>
     <script src="https://cdn.jsdelivr.net/npm/web3@1.7.0/dist/web3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100">
@@ -65,12 +27,40 @@
     </div>
 
     <script>
+        // XLSX 处理逻辑（保留，未来可扩展）
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+            return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+            if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+                try {
+                    var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                    var firstSheetName = workbook.SheetNames[0];
+                    var worksheet = workbook.Sheets[firstSheetName];
+                    var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                    var filteredData = jsonData.filter(row => row.some(filledCell));
+                    var headerRowIndex = filteredData.findIndex((row, index) =>
+                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                    );
+                    if (headerRowIndex === -1 || headerRowIndex > 25) {
+                        headerRowIndex = 0;
+                    }
+                    var csv = XLSX.utils.sheet_to_csv(XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)));
+                    return csv;
+                } catch (e) {
+                    console.error('XLSX 解析错误:', e);
+                    return "";
+                }
+            }
+            return gk_fileData[filename] || "";
+        }
 
- // 这里需要填入实际的合约ABI
+        // 合约配置
+        const contractAddress = "0x0a0245e075880fB96A93ab81aa6D179255823577"; // 替换为 Sepolia 部署地址
         const contractABI = [
-           
-
-[
 	{
 		"inputs": [
 			{
@@ -857,23 +847,32 @@
 		"stateMutability": "view",
 		"type": "function"
 	}
-]
-        ];
-        const contractAddress = "0x0a0245e075880fB96A93ab81aa6D179255823577"; // 替换为实际部署的合约地址
+];
         let web3, contract, userAccount;
 
         async function init() {
+            console.log('window.ethereum:', window.ethereum);
             if (window.ethereum) {
                 web3 = new Web3(window.ethereum);
                 try {
+                    const chainId = await web3.eth.net.getId();
+                    if (chainId !== 11155111) {
+                        alert('请切换到 Sepolia 网络');
+                        return;
+                    }
                     await window.ethereum.request({ method: 'eth_requestAccounts' });
                     const accounts = await web3.eth.getAccounts();
                     userAccount = accounts[0];
                     contract = new web3.eth.Contract(contractABI, contractAddress);
+                    console.log('contract methods:', contract.methods);
+                    if (!contract.methods.mintNFT) {
+                        alert('mintNFT 方法未找到，请检查 ABI');
+                        return;
+                    }
                     updateUI();
                 } catch (error) {
                     console.error("连接钱包失败:", error);
-                    alert("连接钱包失败，请确保MetaMask已安装并连接到Arbitrum网络");
+                    alert("连接钱包失败，请确保MetaMask已安装并连接到Sepolia网络");
                 }
             } else {
                 alert("请安装MetaMask!");
@@ -884,27 +883,39 @@
             const walletInfo = document.getElementById('wallet-info');
             walletInfo.innerHTML = `已连接钱包: ${userAccount}`;
             
-            // 获取用户可铸造的NFT集合
-            const collections = await contract.methods.getUserCollections(userAccount).call();
-            const collectionsList = document.getElementById('collections-list');
-            collectionsList.innerHTML = '';
-            
-            for (let collectionId of collections) {
-                const collection = await contract.methods.nftCollections(collectionId).call();
-                const div = document.createElement('div');
-                div.className = 'mb-4 p-4 border rounded';
-                div.innerHTML = `
-                    <img src="${collection.imageURI}" class="w-32 h-32 object-cover mb-2" onerror="this.src='https://via.placeholder.com/150'">
-                    <p>集合ID: ${collectionId}</p>
-                    <p>当前供应: ${collection.currentSupply}/${collection.maxSupply}</p>
-                    <p>Gas费用: ${collection.gasSponsored ? '发起者承担' : '用户自付 (0.001 ETH)'}</p>
-                    <button onclick="mintNFT(${collectionId})" class="bg-blue-500 text-white p-2 rounded mt-2">铸造NFT</button>
-                `;
-                collectionsList.appendChild(div);
+            try {
+                const collections = await contract.methods.getUserCollections(userAccount).call();
+                const collectionsList = document.getElementById('collections-list');
+                collectionsList.innerHTML = '';
+                
+                for (let collectionId of collections) {
+                    const collection = await contract.methods.nftCollections(collectionId).call();
+                    const div = document.createElement('div');
+                    div.className = 'mb-4 p-4 border rounded';
+                    div.innerHTML = `
+                        <img src="${collection.imageURI}" class="w-32 h-32 object-cover mb-2" onerror="this.src='https://via.placeholder.com/150'">
+                        <p>集合ID: ${collectionId}</p>
+                        <p>图片: ${collection.imageURI.slice(0, 20)}...</p>
+                        <p>当前供应: ${collection.currentSupply}/${collection.maxSupply}</p>
+                        <p>Gas费用: ${collection.gasSponsored ? '发起者承担' : '用户自付 (0.001 ETH)'}</p>
+                        <button onclick="mintNFT(${collectionId})" class="bg-blue-500 text-white p-2 rounded mt-2">铸造NFT</button>
+                    `;
+                    collectionsList.appendChild(div);
+                }
+                if (collections.length === 0) {
+                    collectionsList.innerHTML = '<p>暂无可铸造的NFT集合</p>';
+                }
+            } catch (error) {
+                console.error("更新UI失败:", error);
+                alert("无法加载NFT集合，请检查合约地址和网络");
             }
         }
 
         async function mintNFT(collectionId) {
+            if (!contract || !contract.methods.mintNFT) {
+                alert('合约未初始化或 mintNFT 方法不可用，请检查 ABI 和合约地址');
+                return;
+            }
             document.getElementById('loading').classList.remove('hidden');
             try {
                 const collection = await contract.methods.nftCollections(collectionId).call();
